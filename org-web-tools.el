@@ -137,6 +137,22 @@ unusually long to start on your system (which it seems to on
 FreeBSD, for some reason), you may need to increase this."
   :type 'float)
 
+(defcustom org-web-tools-title-transforms nil
+  "Alist for URL-specific title post-processing after whitespace cleanup.
+Each element has the form (URL-REGEXP (TITLE-REGEXP . REPLACEMENT) ...).
+When a URL matches URL-REGEXP, each (TITLE-REGEXP . REPLACEMENT) pair is
+applied in order via `replace-regexp-in-string'.
+
+Example that strips GitHub boilerplate from titles:
+  ((\"github\\\\.com\"
+    (\"^GitHub - \" . \"\")
+    (\" · GitHub$\" . \"\")))"
+  :type '(alist
+          :key-type (regexp :tag "URL regexp")
+          :value-type (repeat
+                       (cons (regexp :tag "Title regexp")
+                             (string :tag "Replacement")))))
+
 (defun org-web-tools--html-to-org-with-pandoc (html &optional selector)
   "Return string of HTML converted to Org with Pandoc.
 When SELECTOR is non-nil, the HTML is filtered using
@@ -333,7 +349,8 @@ at URL has no title, return URL."
   (if-let ((dom (plz 'get url :as (lambda ()
                                     (libxml-parse-html-region (point-min) (point-max)))))
            (title (cl-caddr (car (dom-by-tag dom 'title)))))
-      (org-link-make-string url (org-web-tools--cleanup-title title))
+      (org-link-make-string url (org-web-tools--apply-title-transforms
+                                 url (org-web-tools--cleanup-title title)))
     (message "HTML page at URL has no title")
     url))
 
@@ -363,7 +380,8 @@ first-level entry for writing comments."
   (-let* ((url (or url (org-web-tools--get-first-url)))
           (dom (plz 'get url :as #'org-web-tools--sanitized-dom))
           ((title . readable) (org-web-tools--eww-readable dom))
-          (title (org-web-tools--cleanup-title (or title "")))
+          (title (org-web-tools--apply-title-transforms
+                  url (org-web-tools--cleanup-title (or title ""))))
           (converted (org-web-tools--html-to-org-with-pandoc readable))
           (link (org-link-make-string url title))
           (timestamp (format-time-string (org-time-stamp-format 'with-time 'inactive))))
@@ -400,6 +418,19 @@ first-level entry for writing comments."
        (s-replace "\n" " ")
        (s-trim)
        (s-collapse-whitespace)))
+
+(defun org-web-tools--apply-title-transforms (url title)
+  "Return TITLE after applying matching rules from `org-web-tools-title-transforms' for URL."
+  (seq-reduce
+   (lambda (title rule)
+     (if (string-match-p (car rule) url)
+         (seq-reduce (lambda (acc sub)
+                       (replace-regexp-in-string (car sub) (cdr sub) acc))
+                     (cdr rule)
+                     title)
+       title))
+   org-web-tools-title-transforms
+   title))
 
 (defun org-web-tools--demote-headings-below (level &optional skip)
   "Demote all headings in buffer so the highest level is below LEVEL.
